@@ -50,7 +50,7 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
         optional = obj.get(param_name)
         if optional:
             if param_name != 'syntax':
-                prev = "{} {:<8} ".format(prev, optional.strip(' \n'))
+                prev = "{} {:<8} ".format(prev, optional)
         return prev
 
     def add_syntax(prev: str) -> str:
@@ -71,7 +71,7 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
                         units_tag = param_type.find('units')
 
                         if units_tag is not None:
-                            syntax_text = syntax_text + " in " + units_tag.get('value').strip('\n')
+                            syntax_text = syntax_text + " in " + units_tag.get('value')
 
                         prev = "{} {}".format(prev, syntax_text)
                     else:
@@ -82,12 +82,12 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
                     # String parameter processing
                     enum_type = param_type.findall('enumeration')
                     if enum_type:
-                        prev = "enums ({})".format("|".join([e.get('value').strip('\n') for e in enum_type]))
+                        prev = "enums ({})".format("|".join([e.get('value') for e in enum_type]))
                     else:
                         param_type = param_type.find('size')
 
                         if param_type:
-                            syntax_text = "max length " + param_type.get('maxLength').strip('\n')
+                            syntax_text = "max length " + param_type.get('maxLength')
 
                         prev = f"{prev} string{syntax_text}"
 
@@ -96,11 +96,11 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
 
             param_type = syntax.find('default')
             if param_type:
-                prev = "{} {}".format(prev,param_type.text.strip('\n'))
+                prev = "{} {}".format(prev,param_type.text)
 
         return prev
 
-    desc = re.sub(' +', ' ', obj.find('description').text.strip('\n'))
+    desc = obj.find('description').text
 
     text = ""
     text = add_optionals(text, 'status')
@@ -109,8 +109,8 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
     text = add_syntax(text)
 
     return (
-        obj.get('name').strip('\n'),
-        obj.get('access').strip('\n'),
+        obj.get('name'),
+        obj.get('access'),
         f"{text} {desc}"
     )
 
@@ -134,7 +134,7 @@ def parse_object(obj: Element, version: str) -> List[Dict[str, str]]:
             combined.append({
                 'Object' : obj.get('name') + name,
                 'Access': obj.get('access'),
-                'Description': re.sub(' +', ' ', obj.find('description').text.strip('\n')),
+                'Description': re.sub(' +', ' ', obj.find('description').text),
                 'Model': version,
                 'Parameter Access': access,
                 'Parameter Description' : desc
@@ -144,7 +144,7 @@ def parse_object(obj: Element, version: str) -> List[Dict[str, str]]:
         combined.append({
             'Object' : obj.get('name'),
             'Access': obj.get('access'),
-            'Description': re.sub(' +', ' ', obj.find('description').text.strip('\n')),
+            'Description': re.sub(' +', ' ', obj.find('description').text),
             'Model': version,
             'Parameter Access': "",
             'Parameter Description' : ""
@@ -163,12 +163,9 @@ def get_profile_params(obj: Element) -> str:
     Returns:
         str -- Concatanated string of all parameters
     """
-    name = obj.get('ref').strip('\n')
-    access = obj.get('requirement').strip('\n')
-
-    text = "{:<12} ".format(access)
-
-    return text + name
+    name = obj.get('ref')
+    access = obj.get('requirement')
+    return "{:<12} {}".format(access, name)
 
 def parse_profile(obj: Element, profile: Element) -> Dict[str,str]:
     """Parses model profile and related object element.
@@ -221,8 +218,11 @@ def build_sheet(ws: Worksheet, data: pd.DataFrame, columns: List[str]):
 
 def clean_model(model: pd.DataFrame) -> pd.DataFrame:
     #TODO: Perform data text cleaning at Dataframe level
+    #TODO: Add items beyond removing spaces
+    def process_text(x):
+        return re.sub(' +', ' ', x).strip('\n')
 
-    pass
+    return model.applymap(process_text)
 
 
 def parse_model(filename: str, output: str):
@@ -240,7 +240,7 @@ def parse_model(filename: str, output: str):
     objects = [final_obj for obj in model.findall('object') for final_obj in parse_object(obj, model.get('name'))]
     profiles = [parse_profile(obj, profile) for profile in model.findall('profile') for obj in profile.findall('object')]
 
-    df_model = pd.DataFrame.from_records(objects)
+    df_model = pd.DataFrame.from_records(objects).applymap(lambda x: re.sub(' +', ' ', x).strip('\n'))
     df_profile = pd.DataFrame.from_records(profiles).sort_values(by=['Profile', 'Name', 'Base'])
 
     # We have both model and profiles in the dataframes so from here we can just generate Excel
