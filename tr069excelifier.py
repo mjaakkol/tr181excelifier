@@ -37,19 +37,67 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
         str -- All the parameters field as single string
     """
 
-    def add_optionals(prev: str, param: Element) -> Dict[str,str]:
+    def add_optionals(prev: str, param_name: str) -> str:
         """Helper function for adding optional elements
 
         Arguments:
             prev {str} -- The parameter string so far and where the new values will be concatanated
-            param {Element} -- Element object for parameter element
+            param {str} -- Element object for parameter element
 
         Returns:
-            Dict[str,str] -- Object parameter attributes
+            str -- Object parameter attributes
         """
-        optional = obj.get(param)
+        optional = obj.get(param_name)
         if optional:
-            prev = "{} {:<8} ".format(prev, optional.strip(' \n'))
+            if param_name != 'syntax':
+                prev = "{} {:<8} ".format(prev, optional.strip(' \n'))
+        return prev
+
+    def add_syntax(prev: str) -> str:
+        syntax = obj.find('syntax')
+        if syntax:
+            syntax_text = ""
+            param_type = syntax.find('boolean')
+
+            if not param_type:
+                param_type = syntax.find('string')
+
+                if not param_type:
+                    # We'll take the first item (this is kind of ugly as relies into ordering)
+                    param_type = list(syntax)
+                    if param_type:
+                        param_type = param_type[0]
+                        syntax_text = param_type.tag
+                        units_tag = param_type.find('units')
+
+                        if units_tag is not None:
+                            syntax_text = syntax_text + " in " + units_tag.get('value').strip('\n')
+
+                        prev = "{} {}".format(prev, syntax_text)
+                    else:
+                        # We can hit here in some non-standard types and that's OK
+                        pass
+
+                else:
+                    # String parameter processing
+                    enum_type = param_type.findall('enumeration')
+                    if enum_type:
+                        prev = "enums ({})".format("|".join([e.get('value').strip('\n') for e in enum_type]))
+                    else:
+                        param_type = param_type.find('size')
+
+                        if param_type:
+                            syntax_text = "max length " + param_type.get('maxLength').strip('\n')
+
+                        prev = f"{prev} string{syntax_text}"
+
+            else:
+                prev = f"{prev} boolean"
+
+            param_type = syntax.find('default')
+            if param_type:
+                prev = "{} {}".format(prev,param_type.text.strip('\n'))
+
         return prev
 
     desc = re.sub(' +', ' ', obj.find('description').text.strip('\n'))
@@ -58,6 +106,7 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
     text = add_optionals(text, 'status')
     text = add_optionals(text, 'activeNotify')
     text = add_optionals(text, 'forcedInform')
+    text = add_syntax(text)
 
     return (
         obj.get('name').strip('\n'),
@@ -169,6 +218,11 @@ def build_sheet(ws: Worksheet, data: pd.DataFrame, columns: List[str]):
     for column in columns:
         for cell in ws[f"{column}:{column}"]:
             cell.alignment = alignment
+
+def clean_model(model: pd.DataFrame) -> pd.DataFrame:
+    #TODO: Perform data text cleaning at Dataframe level
+
+    pass
 
 
 def parse_model(filename: str, output: str):
