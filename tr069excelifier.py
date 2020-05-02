@@ -45,7 +45,10 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
             param {str} -- Element object for parameter element
 
         Returns:
-            str -- Object parameter attributes
+            Tuple
+            str -- Object parameter name
+            str -- Object parameter access attribute
+            str -- Object parameter description
         """
         optional = obj.get(param_name)
         if optional:
@@ -53,7 +56,17 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
                 prev = "{} {:<8} ".format(prev, optional)
         return prev
 
-    def add_syntax(prev: str) -> str:
+    def add_syntax(prev: str, desc: str) -> Tuple[str,str]:
+        """Adds information from syntax tag containing parameter type information
+
+        Arguments:
+            prev {str} -- Input string to be used as bases to append new items
+            desc {str} -- Description string where applicable tags are filled from found items
+
+        Returns:
+            str -- Constructed string
+            desc -- Description string with potential replacements
+        """
         syntax = obj.find('syntax')
         if syntax:
             syntax_text = ""
@@ -71,7 +84,9 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
                         units_tag = param_type.find('units')
 
                         if units_tag is not None:
-                            syntax_text = syntax_text + " in " + units_tag.get('value')
+                            unit_value = units_tag.get('value')
+                            syntax_text = "{} in {}".format(syntax_text, unit_value)
+                            desc = re.sub('{{units}}', unit_value, desc)
 
                         prev = "{} {}".format(prev, syntax_text)
                     else:
@@ -82,23 +97,23 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
                     # String parameter processing
                     enum_type = param_type.findall('enumeration')
                     if enum_type:
-                        prev = "enums ({})".format("|".join([e.get('value') for e in enum_type]))
+                        prev = "Enums ({})".format("|".join([e.get('value') for e in enum_type]))
                     else:
                         param_type = param_type.find('size')
 
                         if param_type:
                             syntax_text = "max length " + param_type.get('maxLength')
 
-                        prev = f"{prev} string{syntax_text}"
+                        prev = f"{prev} String{syntax_text}"
 
             else:
-                prev = f"{prev} boolean"
+                prev = f"{prev} Boolean"
 
             param_type = syntax.find('default')
             if param_type:
                 prev = "{} {}".format(prev,param_type.text)
 
-        return prev
+        return prev, desc
 
     desc = obj.find('description').text
 
@@ -106,7 +121,7 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
     text = add_optionals(text, 'status')
     text = add_optionals(text, 'activeNotify')
     text = add_optionals(text, 'forcedInform')
-    text = add_syntax(text)
+    (text, desc) = add_syntax(text, desc)
 
     return (
         obj.get('name'),
@@ -114,12 +129,11 @@ def get_params(obj: Element) -> Tuple[str,str,str]:
         f"{text} {desc}"
     )
 
-def parse_object(obj: Element, version: str) -> List[Dict[str, str]]:
+def parse_object(obj: Element) -> List[Dict[str, str]]:
     """Parses device model object
 
     Arguments:
         obj {Element} -- Device object
-        version {str} -- Device model version
 
     Returns:
         List[Dict[str, str]] -- List of object dictionaries from the same root.
@@ -132,10 +146,10 @@ def parse_object(obj: Element, version: str) -> List[Dict[str, str]]:
             (name, access, desc) = get_params(param)
 
             combined.append({
-                'Object' : obj.get('name') + name,
+                'Object' : obj.get('name'),
                 'Access': obj.get('access'),
                 'Description': re.sub(' +', ' ', obj.find('description').text),
-                'Model': version,
+                'Parameter': name,
                 'Parameter Access': access,
                 'Parameter Description' : desc
             })
@@ -145,7 +159,7 @@ def parse_object(obj: Element, version: str) -> List[Dict[str, str]]:
             'Object' : obj.get('name'),
             'Access': obj.get('access'),
             'Description': re.sub(' +', ' ', obj.find('description').text),
-            'Model': version,
+            'Parameter': "",
             'Parameter Access': "",
             'Parameter Description' : ""
         })
@@ -217,12 +231,59 @@ def build_sheet(ws: Worksheet, data: pd.DataFrame, columns: List[str]):
             cell.alignment = alignment
 
 def clean_model(model: pd.DataFrame) -> pd.DataFrame:
-    #TODO: Perform data text cleaning at Dataframe level
-    #TODO: Add items beyond removing spaces
-    def process_text(x):
-        return re.sub(' +', ' ', x).strip('\n')
+    """Cleans all markdown language and unnecessary characters from the fields
 
-    return model.applymap(process_text)
+    Arguments:
+        model {pd.DataFrame} --Input DataFrame for cleaning
+
+    Returns:
+        pd.DataFrame -- Cleaned DataFrame
+    """
+    def process_text(text) -> str:
+        """Process all the elements for the common operations like stripping extra spaces and newlines
+
+        Arguments:
+            text {str} -- Text of the cell to be manipulated
+
+        Returns:
+            str -- The final string without extra spaces and newlines
+        """
+        text = re.sub(' +', ' ', text)
+        return re.sub('\n', '', text).strip()
+
+    def map_params(row: pd.Series, column: str) -> str:
+        """Cleans description strings from markdown language a row at the time.
+
+        Arguments:
+            row {pd.Series} -- Row where to apply the transformations
+            column {str} -- Name of the column to be manipulated
+
+        Returns:
+            str -- The cleaned description string
+        """
+        # Replaces the references to the current object and param with the actual name.
+        text = re.sub('{{object}}', row['Object'], row[column])
+        text = re.sub('{{param}}', row['Parameter'], text)
+
+        # Basic stuff not really helping us
+        filtered = r'( {{numentries}}| {{datatype\|expand}}| {{pattern}}| {{enum}}| {{list}}| {{reference}}| {{noreference}})'
+        text = re.sub(filtered, r'', text)
+
+        # Removing text|preserved strings
+        text = re.sub(r'{{\w+\|([^}]+)}}', r'\1', text)
+
+        # Removing common {{word}} items. This must be the last item as it can remove something usefull as well
+        text = re.sub(r'{{(\w+)}}', r'\1', text)
+        return text
+
+    # This is pretty heavy and done for each item. We maybe able to remove this as most the undesired characters are
+    # in the description parts
+    model = model.applymap(process_text)
+
+    model['Parameter Description'] = model.apply(lambda x: map_params(x,'Parameter Description'), axis=1)
+    model['Description'] = model.apply(lambda x: map_params(x,'Description'), axis=1)
+
+    return model
 
 
 def parse_model(filename: str, output: str):
@@ -235,12 +296,19 @@ def parse_model(filename: str, output: str):
     tree = ET.parse(filename)
     #I'm only interested in the model and profiles so the rest is discarded for now
     model = tree.getroot().find('model')
+    version = model.get('name')
 
     # These build both model and profile parts
-    objects = [final_obj for obj in model.findall('object') for final_obj in parse_object(obj, model.get('name'))]
+    objects = [final_obj for obj in model.findall('object') for final_obj in parse_object(obj)]
     profiles = [parse_profile(obj, profile) for profile in model.findall('profile') for obj in profile.findall('object')]
 
-    df_model = pd.DataFrame.from_records(objects).applymap(lambda x: re.sub(' +', ' ', x).strip('\n'))
+    df_model = clean_model(pd.DataFrame.from_records(objects))
+
+    unique_items = pd.unique(df_model['Object'])
+    index_ranges_list = [(2+min(df_model[df_model['Object'] == o].index), 2+max(df_model[df_model['Object'] == o].index)) for o in unique_items]
+
+    df_model.rename(index={0: f"Object ({version})"}, inplace=True)
+
     df_profile = pd.DataFrame.from_records(profiles).sort_values(by=['Profile', 'Name', 'Base'])
 
     # We have both model and profiles in the dataframes so from here we can just generate Excel
@@ -249,14 +317,19 @@ def parse_model(filename: str, output: str):
     ws_model.title = "Model"
     ws_profile = wb.create_sheet("Profiles")
 
-    build_sheet(ws_model, df_model, ['D', 'E'])
+    build_sheet(ws_model, df_model, ['C', 'D', 'E'])
     build_sheet(ws_profile, df_profile, ['F'])
 
+    # Performing cell merges where applicable
+    for (min_cell, max_cell) in index_ranges_list:
+        for column in 'ABC':
+            ws_model.merge_cells(f'{column}{min_cell}:{column}{max_cell}')
+
     # Formatting the column widths roughly right. Not pretty but will do for now.
-    ws_model.column_dimensions['A'].width=75.0
-    ws_model.column_dimensions['B'].width=12.0
+    ws_model.column_dimensions['A'].width=50.0
+    ws_model.column_dimensions['B'].width=11.0
     ws_model.column_dimensions['C'].width=40.0
-    ws_model.column_dimensions['D'].width=12.0
+    ws_model.column_dimensions['D'].width=45.0
     ws_model.column_dimensions['E'].width=15.0
     ws_model.column_dimensions['F'].width=400.0
 
